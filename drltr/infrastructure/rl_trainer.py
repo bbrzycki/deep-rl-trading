@@ -4,6 +4,7 @@ from collections import OrderedDict
 import pickle
 import numpy as np
 import tensorflow as tf
+import pandas as pd
 import gym
 import os
 import sys
@@ -44,9 +45,26 @@ class RL_Trainer(object):
         #############
 
         # Make the gym environment
-        self.env = gym.make(self.params['env_name'],
-                            df=self.params['df'],
-                            ep_len=self.params['ep_len'])
+        self.env = gym.make(self.params['env_name'],)
+        if self.params['train_data_path'] != '':
+            df = self.params['train_df']
+            if self.params['train_data_path2'] != '':
+                df2 = self.params['train_df2']
+        elif self.params['test_data_path'] != '':
+            df = self.params['test_df']
+            if self.params['test_data_path2'] != '':
+                df2 = self.params['test_df2']
+        if '' not in [self.params['train_data_path2'], self.params['test_data_path2']]:
+            self.env.set_init(df1=df,
+                              df2=df2,
+                              ep_len=self.params['ep_len'],
+                              lookback_num=self.params['lookback_num'])
+        else:
+            self.env.set_init(df=df,
+                              ep_len=self.params['ep_len'],
+                              lookback_num=self.params['lookback_num'])
+
+
         if 'env_wrappers' in self.params:
             # These operations are currently only for Atari envs
             self.env = wrappers.Monitor(self.env, os.path.join(self.params['logdir'], "gym"), force=True)
@@ -54,6 +72,11 @@ class RL_Trainer(object):
             self.mean_episode_reward = -float('nan')
             self.best_mean_episode_reward = -float('inf')
         self.env.seed(seed)
+
+        # if self.params['test_data_path'] != '':
+        #     self.test_env = gym.make(self.params['env_name'])
+        #     self.test_env.set_init(df=self.params['test_df'],
+        #                       ep_len=self.params['ep_len'])
 
         # Maximum length for episodes
         self.params['ep_len'] = self.params['ep_len'] or self.env.spec.max_episode_steps
@@ -88,12 +111,71 @@ class RL_Trainer(object):
 
         agent_class = self.params['agent_class']
         self.agent = agent_class(self.sess, self.env, self.params['agent_params'])
+        # if self.params['test_data_path'] != '':
+        #     self.test_agent = agent_class(self.sess, self.test_env, self.params['agent_params'])
 
         #############
         ## INIT VARS
         #############
 
         tf.global_variables_initializer().run(session=self.sess)
+
+        #############
+        ## LOAD SESS
+        #############
+        # For now will just leave the sess variable initializer there
+        if self.params['load_sess'] != '':
+            saver = tf.train.Saver()
+            saver.restore(self.sess, self.params['load_sess'])
+            print('Model loaded...')
+
+    def run_test(self):
+        """
+        Evaluate performance on unseen test data.
+        """
+        LOOKBACK_NUM = self.params['lookback_num']
+        n_iter = len(self.params['test_df']) - LOOKBACK_NUM
+
+        df = self.params['test_df']
+
+        if self.params['train_data_path'] != '':
+            df = pd.concat([self.params['train_df'].iloc[-LOOKBACK_NUM:], df],
+                           ignore_index=True)
+            n_iter += LOOKBACK_NUM
+
+        if self.params['test_data_path2'] != '':
+            df2 = self.params['test_df2']
+            if self.params['train_data_path'] != '':
+                df2 = pd.concat([self.params['train_df2'].iloc[-LOOKBACK_NUM:], df2],
+                               ignore_index=True)
+
+
+
+
+        self.env.env.reset()
+        if self.params['test_data_path2'] != '':
+            self.env.env.set_init(df1=df,
+                                  df2=df2,
+                                  ep_len=n_iter,
+                                  lookback_num=LOOKBACK_NUM)
+                                  #ep_len=self.params['ep_len'])
+        else:
+            self.env.env.set_init(df=df,
+                                  ep_len=n_iter,
+                                  lookback_num=LOOKBACK_NUM)
+                                  #ep_len=self.params['ep_len'])
+        self.agent.last_obs = self.env.env.set_first()
+
+        balances = [self.env.env.net_worth]
+        for itr in range(0, n_iter):
+            self.agent.step_test_env()
+            balances.append(self.env.env.net_worth)
+
+            if self.params['test_data_path2'] != '':
+                print(self.env.env.balance, self.env.env.net_worth, self.env.env.shares_held1, self.env.env.shares_held2, self.env.env.total_sales_value)
+            else:
+                print(self.env.env.balance, self.env.env.net_worth, self.env.env.shares_held, self.env.env.total_sales_value)
+        np.save(self.params['logdir'] + '/test_net_worth.npy', balances)
 
 
     def run_training_loop(self, n_iter, collect_policy, eval_policy,
@@ -113,6 +195,8 @@ class RL_Trainer(object):
         self.total_envsteps = 0
         self.start_time = time.time()
 
+        saver = tf.train.Saver()
+
         for itr in range(n_iter):
             #print("\n\n********** Iteration %i ************"%itr)
 
@@ -129,6 +213,13 @@ class RL_Trainer(object):
                 self.logmetrics = True
             else:
                 self.logmetrics = False
+
+            if self.params['save_sess_freq'] == -1:
+                self.savesess = False
+            elif itr % self.params['save_sess_freq'] == 0:
+                self.savesess = True
+            else:
+                self.savesess = False
 
             # collect trajectories, to be used for training
             if isinstance(self.agent, DQNAgent):
@@ -167,6 +258,12 @@ class RL_Trainer(object):
                     print('\nSaving agent\'s actor...')
                     self.agent.actor.save(self.params['logdir'] + '/policy_itr_'+str(itr))
                     self.agent.critic.save(self.params['logdir'] + '/critic_itr_'+str(itr))
+
+            if self.savesess:
+                save_path = saver.save(self.sess, self.params['logdir'] + '/sess_'+str(itr)+'.ckpt')
+
+        # Save session
+        save_path = saver.save(self.sess, self.params['logdir'] + '/sess_final.ckpt')
 
     ####################################
     ####################################

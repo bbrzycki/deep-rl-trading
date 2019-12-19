@@ -28,9 +28,8 @@ class DQNAgent(object):
         self.critic = DQNCritic(sess, agent_params, self.optimizer_spec)
         self.actor = ArgMaxPolicy(sess, self.critic)
 
-        lander = agent_params['env_name'] == 'LunarLander-v2'
         self.replay_buffer = MemoryOptimizedReplayBuffer(
-            agent_params['replay_buffer_size'], agent_params['frame_history_len'], lander=lander)
+            agent_params['replay_buffer_size'], agent_params['frame_history_len'])
         # self.replay_buffer = ReplayBuffer(agent_params['replay_buffer_size'])
 
         self.t = 0
@@ -38,6 +37,19 @@ class DQNAgent(object):
 
     def add_to_replay_buffer(self, paths):
         pass
+
+    def step_test_env(self):
+        self.replay_buffer_idx = self.replay_buffer.store_frame(self.last_obs)
+
+        enc_last_obs = self.replay_buffer.encode_recent_observation()
+        enc_last_obs = enc_last_obs[None, :]
+
+        action = self.actor.get_action(enc_last_obs)
+        action = action[0]
+
+        self.last_obs, reward, done, info = self.env.step(action)
+
+        self.replay_buffer.store_effect(self.replay_buffer_idx, action, reward, done)
 
     def step_env(self):
 

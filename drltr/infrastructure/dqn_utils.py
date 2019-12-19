@@ -7,29 +7,110 @@ import gym
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.layers as layers
+from .tf_utils import lrelu
 
-from drltr.infrastructure.atari_wrappers import wrap_deepmind
+# from drltr.infrastructure.atari_wrappers import wrap_deepmind
 
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
-def get_env_kwargs(env_name):
-    if env_name == 'OnlyLong-v0':
+
+def get_env_kwargs(env_name, lookback_num=5, model='fc'):
+
+    # if env_name == 'Discrete-1-Equity-v0':
+    if env_name == 'Discrete-1-Equity-v0':
         def empty_wrapper(env):
             return env
+        if model=='fc':
+            model = trading_model
+        elif model=='lstm':
+            model = trading_model_lstm
         kwargs = {
             'optimizer_spec': trading_optimizer(),
-            'q_func': trading_model,
-            'replay_buffer_size': 2000,
+            'q_func': model,
+            'replay_buffer_size': 5000,
             'batch_size': 32,
-            'gamma': 1.00,
-            'learning_starts': 100,
+            'gamma': 1,
+            'learning_starts': 200,
             'learning_freq': 1,
             'frame_history_len': 1,
             'target_update_freq': 200,
             'grad_norm_clipping': 5,
-            'num_timesteps': 20000,
+            'num_timesteps': 2000,
             'env_wrappers': empty_wrapper,
-            'input_shape': (6, 6, 1),
+            'lookback_num': lookback_num,
+            'input_shape': (5, lookback_num + 2, 1),
+        }
+        kwargs['exploration_schedule'] = trading_exploration_schedule(kwargs['num_timesteps'])
+    elif env_name == 'Discrete-1-Equity-Costs-v0':
+        def empty_wrapper(env):
+            return env
+        if model=='fc':
+            model = trading_model
+        elif model=='lstm':
+            model = trading_model_lstm
+        kwargs = {
+            'optimizer_spec': trading_optimizer(),
+            'q_func': model,
+            'replay_buffer_size': 5000,
+            'batch_size': 32,
+            'gamma': 1.00,
+            'learning_starts': 200,
+            'learning_freq': 1,
+            'frame_history_len': 1,
+            'target_update_freq': 200,
+            'grad_norm_clipping': 5,
+            'num_timesteps': 10000,
+            'env_wrappers': empty_wrapper,
+            'lookback_num': lookback_num,
+            'input_shape': (5, lookback_num + 2, 1),
+        }
+        kwargs['exploration_schedule'] = trading_exploration_schedule(kwargs['num_timesteps'])
+    elif env_name == 'Discrete-1-Equity-Short-v0':
+        def empty_wrapper(env):
+            return env
+        if model=='fc':
+            model = trading_model
+        elif model=='lstm':
+            model = trading_model_lstm
+        kwargs = {
+            'optimizer_spec': trading_optimizer(),
+            'q_func': model,
+            'replay_buffer_size': 5000,
+            'batch_size': 32,
+            'gamma': 1.00,
+            'learning_starts': 200,
+            'learning_freq': 1,
+            'frame_history_len': 1,
+            'target_update_freq': 200,
+            'grad_norm_clipping': 5,
+            'num_timesteps': 2000,
+            'env_wrappers': empty_wrapper,
+            'lookback_num': lookback_num,
+            'input_shape': (5, lookback_num + 2, 1),
+        }
+        kwargs['exploration_schedule'] = trading_exploration_schedule(kwargs['num_timesteps'])
+    elif env_name == 'Discrete-2-Equities-v0':
+        def empty_wrapper(env):
+            return env
+        if model=='fc':
+            model = trading_model
+        elif model=='lstm':
+            model = define_trading_model_lstm1(lookback_num)
+        kwargs = {
+            'optimizer_spec': trading_optimizer(),
+            'q_func': model,
+            'replay_buffer_size': 5000,
+            'batch_size': 32,
+            'gamma': 1.00,
+            'learning_starts': 200,
+            'learning_freq': 1,
+            'frame_history_len': 1,
+            'target_update_freq': 200,
+            'grad_norm_clipping': 5,
+            'num_timesteps': 2000,
+            'env_wrappers': empty_wrapper,
+            'lookback_num': lookback_num,
+            'input_shape': (5, (lookback_num + 1) * 2 + 1, 1),
         }
         kwargs['exploration_schedule'] = trading_exploration_schedule(kwargs['num_timesteps'])
 
@@ -51,11 +132,81 @@ def trading_model(obs, num_actions, scope, reuse=False):
         return out
 
 
+def trading_model_lstm(obs, num_actions, scope, lookback_num=250, reuse=False):
+    with tf.variable_scope(scope, reuse=reuse):
+        out = obs
+        ts_out, aux_out = out[:, :, :-1, 0], out[:, :, -1:, 0]
+        print(ts_out.shape, aux_out.shape)
+        batch_size = tf.shape(ts_out)[0]
+
+        cell = tf.nn.rnn_cell.LSTMCell(128, activation=tf.nn.tanh)
+        initial_state = cell.zero_state(batch_size, dtype=tf.float32)
+        lstm_out, state = tf.nn.dynamic_rnn(cell, tf.transpose(ts_out, perm=[0, 2, 1]),
+                                            initial_state=initial_state, dtype=tf.float32)
+        print(layers.flatten(lstm_out).shape, layers.flatten(aux_out).shape)
+        out = tf.concat([layers.flatten(lstm_out), layers.flatten(aux_out)], axis=1)
+        print(out.shape)
+        out = layers.flatten(out)
+        # out = tf.layers.batch_normalization(out)
+        # out = lrelu(out)
+        # out = layers.dropout(out)
+        with tf.variable_scope("action_value"):
+            out = layers.fully_connected(out, num_outputs=64, activation_fn=tf.nn.relu)
+            out = layers.fully_connected(out, num_outputs=64, activation_fn=tf.nn.relu)
+            # out = layers.fully_connected(out, num_outputs=32, activation_fn=lrelu)
+            out = layers.fully_connected(out, num_outputs=num_actions, activation_fn=None)
+
+        return out
+
+
+def trading_model1(obs, num_actions, scope, reuse=False):
+    with tf.variable_scope(scope, reuse=reuse):
+        out = obs
+        out = layers.flatten(out)
+        with tf.variable_scope("action_value"):
+            out = layers.fully_connected(out, num_outputs=64, activation_fn=tf.nn.relu)
+            out = layers.fully_connected(out, num_outputs=64, activation_fn=tf.nn.relu)
+            out = layers.fully_connected(out, num_outputs=32, activation_fn=tf.nn.relu)
+            out = layers.fully_connected(out, num_outputs=num_actions, activation_fn=None)
+
+        return out
+
+
+def define_trading_model_lstm1(lookback_num):
+    def trading_model_lstm1(obs, num_actions, scope, reuse=False):
+        with tf.variable_scope(scope, reuse=reuse):
+            out = obs
+            ts_out1, ts_out2, aux_out = out[:, :, :lookback_num+1, 0], out[:, :, lookback_num+1:-1, 0],out[:, :, -1:, 0]
+            batch_size = tf.shape(ts_out1)[0]
+            # timesteps = tf.shape(ts_out)[2]
+            ts_out = tf.concat([ts_out1, ts_out2], axis=1)
+            print(ts_out.shape, aux_out.shape)
+
+            cell = tf.nn.rnn_cell.LSTMCell(8, activation=tf.nn.tanh)
+            initial_state = cell.zero_state(batch_size, dtype=tf.float32)
+            lstm_out, state = tf.nn.dynamic_rnn(cell, tf.transpose(ts_out, perm=[0, 2, 1]),
+                                                initial_state=initial_state, dtype=tf.float32)
+            print(layers.flatten(lstm_out).shape, layers.flatten(aux_out).shape)
+            out = tf.concat([layers.flatten(lstm_out), layers.flatten(aux_out)], axis=1)
+            print(out.shape)
+            out = layers.flatten(out)
+            # out = tf.layers.batch_normalization(out)
+            # out = lrelu(out)
+            # out = layers.dropout(out)
+            with tf.variable_scope("action_value"):
+                out = layers.fully_connected(out, num_outputs=64, activation_fn=tf.nn.relu)
+                out = layers.fully_connected(out, num_outputs=64, activation_fn=tf.nn.relu)
+                # out = layers.fully_connected(out, num_outputs=32, activation_fn=tf.nn.relu)
+                # out = layers.fully_connected(out, num_outputs=64, activation_fn=lrelu)
+                out = layers.fully_connected(out, num_outputs=num_actions, activation_fn=None)
+
+            return out
+    return trading_model_lstm1
 
 def trading_optimizer():
     return OptimizerSpec(
         constructor=tf.train.AdamOptimizer,
-        lr_schedule=ConstantSchedule(1e-3),
+        lr_schedule=ConstantSchedule(1e-4),
         kwargs={}
     )
 
@@ -64,8 +215,9 @@ def trading_exploration_schedule(num_timesteps):
     return PiecewiseSchedule(
         [
             (0, 1),
-            (num_timesteps * 0.1, 0.02),
-        ], outside_value=0.02
+            (num_timesteps * 0.1, 0.4),
+            (num_timesteps * 0.3, 0.2)
+        ], outside_value=0.01
     )
 
 
@@ -332,7 +484,7 @@ def get_wrapper_by_name(env, classname):
             raise ValueError("Couldn't find wrapper named %s"%classname)
 
 class MemoryOptimizedReplayBuffer(object):
-    def __init__(self, size, frame_history_len, lander=False):
+    def __init__(self, size, frame_history_len):
         """This is a memory efficient implementation of the replay buffer.
 
         The sepecific memory optimizations use here are:
@@ -358,7 +510,6 @@ class MemoryOptimizedReplayBuffer(object):
         frame_history_len: int
             Number of memories to be retried for each observation.
         """
-        self.lander = lander
 
         self.size = size
         self.frame_history_len = frame_history_len

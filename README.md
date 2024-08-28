@@ -1,7 +1,7 @@
 # deep-rl-trading
-Portfolio optimization and trading using Deep Reinforcement Learning
+Basic portfolio optimization and trading using Deep Reinforcement Learning
 
-This was completed as a final project for CS 285: Deep Reinforcement Learning at UC Berkeley. The final report is included as a pdf.
+This was my final project for CS 285: Deep Reinforcement Learning at UC Berkeley, taken in Fall 2019. My final report is included as a pdf.
 
 ### Example usage for scripts
 
